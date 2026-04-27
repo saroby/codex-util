@@ -10,6 +10,16 @@ existing ChatGPT OAuth session. The Node `codex` CLI is not launched per
 request, eliminating Node runtime overhead (150~300MB × N parallel) for batch
 workloads.
 
+> **Use `imageprompt` BEFORE this skill when the request has control risk** —
+> visible text, edits, multi-image inputs, IP/brand cleanup, ambiguous
+> ontology ("fox mage", "knight in armor"), exact counts, or tag-soup /
+> fragmented aesthetic input that needs normalization. Skip it for coherent
+> NL requests with no control risk — including ones that already carry an
+> aesthetic in natural language (e.g., "에스프레소 내리는 바리스타 사진",
+> "노인 인물 사진. 따뜻한 골든아워 분위기") — and call this skill directly.
+> See `skills/imageprompt/SKILL.md` for the three named output modes
+> (`PASS_0_MINIMAL`, `PASS_1_LOCK`, `PASS_2_COMPOSE`).
+
 The script reads the OAuth access token from `~/.codex/auth.json` and POSTs a
 Responses-style payload to:
 
@@ -55,11 +65,11 @@ root once invoked, so any absolute path to it works.
 
 - `prompt` — required text prompt
 - `--model` — mainline model used to invoke the tool (default `gpt-5.5`)
-- `--size` — `WxH` (default `1024x1024`). Both width and height must be multiples of 16, and the longer edge must be ≤ 3840. Non-square or large sizes (e.g. `1024x1536`, `2048x2048`) take noticeably longer to generate — see `--timeout` below.
+- `--size` — `auto|WxH` (default `1024x1024`). For explicit sizes, both width and height must be multiples of 16, and the longer edge must be ≤ 3840. Non-square or large sizes (e.g. `1024x1536`, `2048x2048`) take noticeably longer to generate — see `--timeout` below.
 - `--quality` — `auto|low|medium|high` (default `high`)
-- `--background` — `auto|opaque|transparent` (default `auto`)
-- `--action` — `auto|generate|edit`. If omitted, picked automatically: `edit` when `--input-image` is given, otherwise `generate`. Pass explicitly to override (the default is `None` so the script can tell "user said `generate`" apart from "user said nothing").
-- `--input-image PATH_OR_URL` — input image to edit/reference, repeatable. Local files are auto-encoded as `data:image/<mime>;base64,...`; mimetype is detected from magic bytes (PNG/JPEG/GIF/WebP/BMP/HEIC) — unknown formats fail loudly rather than being silently labeled as PNG. `http(s)://` URLs pass through. Implies `--action edit` unless `--action` is set.
+- `--background` — `auto|opaque` (default `auto`). `gpt-image-2` does not support transparent backgrounds; `transparent` is rejected locally before any network call.
+- `--action` — `auto|generate|edit` (default `auto`). Leave this at `auto` for normal use; force `generate` only when input images are references for a new image, or force `edit` only when the input image must be modified in place.
+- `--input-image PATH_OR_URL` — input image to edit/reference, repeatable. Local files are auto-encoded as `data:image/<mime>;base64,...`; mimetype is detected from magic bytes (PNG/JPEG/GIF/WebP/BMP/HEIC) — unknown formats fail loudly rather than being silently labeled as PNG. `http(s)://` URLs pass through.
 - `--output` — output path (parent directory is auto-created)
 - `--events` — save raw SSE event text for debugging
 - `--timeout` — HTTP timeout seconds (default `240`). Square 1024x1024 usually finishes well under 60 s; non-square or larger sizes can need the full window because reasoning + generation both grow.
@@ -85,7 +95,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/skills/imagegen/scripts/gen_image.py" \
 
 On success the script prints `Saved /path/to/output.png` and the file exists at the requested path.
 
-Edit an existing image (input image is automatically encoded and sent with `action=edit`):
+Edit an existing image (input image is automatically encoded; add `--action edit` only if `auto` does not choose the edit path):
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/skills/imagegen/scripts/gen_image.py" \
@@ -98,7 +108,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/skills/imagegen/scripts/gen_image.py" \
 ## Exit codes
 
 - `0` — image saved
-- `1` — no `image_generation_call` result found, or base64/IO failure (re-run with `--events sse.log`)
+- `1` — local validation error, no `image_generation_call` result found, or base64/IO failure (re-run with `--events sse.log` only for stream/result issues)
 - `2` — auth issue: `auth_mode` not `chatgpt`, missing tokens, or 401 expired
 - `3` — non-401 HTTP error from the responses endpoint
 - `4` — network error (connection failed, timeout, stream interrupted)
@@ -120,6 +130,6 @@ codex login          # full re-login
 
 Re-run with `--events sse.log` and inspect the raw SSE stream. The most common cause is a moderation block: the stream ends with a `type:"error"` event (e.g. `code:"moderation_blocked"`, `type:"image_generation_user_error"`) followed by `response.failed`, and only the `reasoning` item ever gets an `output_item.done`. In that case rephrase the prompt — it is not a bug. If no error event is present and the schema appears different, `extract_image_b64` (or `_parse_sse_line` in `codex_client.py`) needs an update.
 
-### Transparent background fails
+### Transparent background is unsupported
 
-The backend image model (`gpt-image-2`) does not support transparent backgrounds at all — only `auto` and `opaque`. Retry with `--background opaque`.
+The backend image model (`gpt-image-2`) does not support transparent backgrounds at all — only `auto` and `opaque`. The CLI rejects `--background transparent` before the network call with exit code `1`; use `--background opaque` when the background must not be model-selected.

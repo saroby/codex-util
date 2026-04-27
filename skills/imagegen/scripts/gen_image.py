@@ -45,6 +45,10 @@ from codex_client import (  # noqa: E402  -- after sys.path mutation
 )
 
 
+class CodexUsageError(CodexToolError):
+    """Invalid local CLI option or option combination."""
+
+
 def _load_input_image(spec: str) -> dict:
     """`--input-image` 인자 → input_image content 객체. 파일 또는 http(s):// URL.
 
@@ -69,11 +73,9 @@ def build_payload(args: argparse.Namespace) -> dict:
         "quality": args.quality,
         "background": args.background,
     }
-    # action 미명시 시 input_image 유무로 자동 판정 (argparse default 와 explicit
-    # 값이 구분 가능하도록 default=None 으로 두고 여기서 결정).
-    effective_action = args.action
-    if effective_action is None:
-        effective_action = "edit" if args.input_image else "generate"
+    # gpt-image-2 docs recommend leaving action=auto unless the caller needs to
+    # force generation or editing. Input images may be edit targets or references.
+    effective_action = args.action or "auto"
     tool["action"] = effective_action
 
     user_content: list[dict] = []
@@ -81,13 +83,28 @@ def build_payload(args: argparse.Namespace) -> dict:
         user_content.append(_load_input_image(img))
     user_content.append({"type": "input_text", "text": args.prompt})
 
-    instructions = (
-        "Use the image_generation tool to edit the provided image based on the prompt. "
-        "Return the image generation result."
-        if args.input_image else
-        "Use the image_generation tool to create the requested image. "
-        "Return the image generation result."
-    )
+    if effective_action == "edit":
+        instructions = (
+            "Use the image_generation tool to edit the provided image based on the prompt. "
+            "Return the image generation result."
+        )
+    elif effective_action == "generate":
+        instructions = (
+            "Use the image_generation tool to create a new image based on the prompt "
+            "and any provided reference images. Return the image generation result."
+        )
+    else:
+        if args.input_image:
+            instructions = (
+                "Use the image_generation tool to create or edit an image according to the "
+                "prompt. Treat provided input images as references or edit targets according "
+                "to the prompt. Return the image generation result."
+            )
+        else:
+            instructions = (
+                "Use the image_generation tool to create the requested image. "
+                "Return the image generation result."
+            )
     return {
         "model": args.model,
         "instructions": instructions,
@@ -149,6 +166,24 @@ def write_image(image_b64: str, output_path: pathlib.Path) -> None:
         raise CodexToolError(f"failed to write image to {output_path}: {e}")
 
 
+def validate_args(args: argparse.Namespace) -> None:
+    if args.background == "transparent":
+        raise CodexUsageError(
+            "--background transparent is not supported for gpt-image-2. "
+            "Use --background auto or --background opaque."
+        )
+    if args.background not in {"auto", "opaque"}:
+        raise CodexUsageError(
+            f"--background: invalid choice: {args.background!r} "
+            "(choose from 'auto', 'opaque')"
+        )
+    if args.action == "edit" and not args.input_image:
+        raise CodexUsageError(
+            "--action edit requires at least one --input-image. "
+            "Use --action generate for a new image, or omit --action to use auto."
+        )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Generate an image via the codex responses endpoint (direct HTTP, no Node CLI)."
@@ -166,22 +201,21 @@ def main() -> int:
     parser.add_argument(
         "--background",
         default="auto",
-        choices=("auto", "opaque", "transparent"),
-        help="Image background",
+        help="Image background: auto or opaque. gpt-image-2 does not support transparent backgrounds.",
     )
     parser.add_argument(
         "--action",
         choices=("auto", "generate", "edit"),
-        default=None,
-        help="Image tool action. If omitted, picked automatically: `edit` when "
-             "--input-image is given, otherwise `generate`. Pass explicitly to override.",
+        default="auto",
+        help="Image tool action. Defaults to `auto`; pass `generate` or `edit` only "
+             "when the workflow must force one behavior.",
     )
     parser.add_argument(
         "--input-image",
         action="append",
         help="Input image to edit/reference. File path or http(s):// URL "
              "(repeatable). Local files are auto-encoded as base64 data URLs. "
-             "Implies --action edit unless --action is set explicitly.",
+             "Use --action edit or --action generate only when auto picks the wrong behavior.",
     )
     parser.add_argument(
         "--events",
@@ -196,6 +230,7 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
+        validate_args(args)
         access, account = load_codex_auth()
         payload = build_payload(args)
         events_path = pathlib.Path(args.events) if args.events else None
@@ -213,7 +248,7 @@ def main() -> int:
         return EXIT_OK
     except CodexError as e:
         sys.stderr.write(f"{e}\n")
-        if isinstance(e, CodexToolError) and not args.events:
+        if isinstance(e, CodexToolError) and not isinstance(e, CodexUsageError) and not args.events:
             sys.stderr.write("Re-run with --events sse.log to inspect raw events.\n")
         return e.exit_code
 

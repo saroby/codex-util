@@ -1,6 +1,6 @@
 {
   "name": "codex-util",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Use Codex AI features inside Claude Code by calling the ChatGPT subscription path (chatgpt.com/backend-api/codex/responses) directly with the existing OAuth session — no Platform API key, no Node CLI fork per call.",
   "author": {
     "name": "saroby"

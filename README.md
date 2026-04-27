@@ -7,6 +7,9 @@ Use Codex AI features inside Claude Code by calling the ChatGPT subscription pat
 ## Skills
 
 - `imagegen` — image generation via the `image_generation` tool
+- `imageprompt` — prompt-routing and prompt-crafting rules for `imagegen`
+  when a request has control risk such as visible text, edits, multiple
+  input images, IP cleanup, exact layout, or tag-soup input
 - `ask` — pure-text consultation / second-opinion / web research via GPT-5.
   `--web` flips on the server-side `web_search` tool (verified working on this
   endpoint), `--json` requests JSON-only output (instruction-based, best-effort
