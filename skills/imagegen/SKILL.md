@@ -58,10 +58,12 @@ root once invoked, so any absolute path to it works.
 - `--size` — `WxH` (default `1024x1024`). Both width and height must be multiples of 16, and the longer edge must be ≤ 3840. Non-square or large sizes (e.g. `1024x1536`, `2048x2048`) take noticeably longer to generate — see `--timeout` below.
 - `--quality` — `auto|low|medium|high` (default `high`)
 - `--background` — `auto|opaque|transparent` (default `auto`)
-- `--action` — `auto|generate|edit` (default `generate`)
+- `--action` — `auto|generate|edit`. If omitted, picked automatically: `edit` when `--input-image` is given, otherwise `generate`. Pass explicitly to override (the default is `None` so the script can tell "user said `generate`" apart from "user said nothing").
+- `--input-image PATH_OR_URL` — input image to edit/reference, repeatable. Local files are auto-encoded as `data:image/<mime>;base64,...`; mimetype is detected from magic bytes (PNG/JPEG/GIF/WebP/BMP/HEIC) — unknown formats fail loudly rather than being silently labeled as PNG. `http(s)://` URLs pass through. Implies `--action edit` unless `--action` is set.
 - `--output` — output path (parent directory is auto-created)
 - `--events` — save raw SSE event text for debugging
 - `--timeout` — HTTP timeout seconds (default `240`). Square 1024x1024 usually finishes well under 60 s; non-square or larger sizes can need the full window because reasoning + generation both grow.
+- `--show-usage` — print `response.completed` usage to stderr (`input` / `cached` / `output` / `reasoning` / `total` tokens). Implies a full SSE drain (the completed event arrives at the very end of the stream).
 
 ## Environment overrides
 
@@ -83,6 +85,16 @@ python3 "${CLAUDE_PLUGIN_ROOT}/skills/imagegen/scripts/gen_image.py" \
 ```
 
 On success the script prints `Saved /path/to/output.png` and the file exists at the requested path.
+
+Edit an existing image (input image is automatically encoded and sent with `action=edit`):
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/skills/imagegen/scripts/gen_image.py" \
+  "Change the dominant color from red to deep blue, keep the composition." \
+  --input-image /path/to/source.png \
+  --quality high --size 1024x1024 \
+  --output /path/to/edited.png
+```
 
 ## Exit codes
 

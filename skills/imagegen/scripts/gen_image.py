@@ -38,9 +38,27 @@ from codex_client import (  # noqa: E402  -- after sys.path mutation
     CodexError,
     CodexToolError,
     EXIT_OK,
+    guess_image_mime,
     load_codex_auth,
     stream_responses,
 )
+
+
+def _load_input_image(spec: str) -> dict:
+    """`--input-image` 인자 → input_image content 객체. 파일 또는 http(s):// URL.
+
+    로컬 파일은 매직 바이트로 mimetype 을 정확히 판정 (PNG silent fallback 회피)."""
+    if spec.startswith(("http://", "https://", "data:")):
+        return {"type": "input_image", "image_url": spec}
+    p = pathlib.Path(spec).expanduser()
+    if not p.is_file():
+        raise CodexToolError(f"--input-image: not a file: {p}")
+    try:
+        mime = guess_image_mime(p)
+    except ValueError as e:
+        raise CodexToolError(f"--input-image: {e}")
+    b64 = base64.b64encode(p.read_bytes()).decode("ascii")
+    return {"type": "input_image", "image_url": f"data:{mime};base64,{b64}"}
 
 
 def build_payload(args: argparse.Namespace) -> dict:
@@ -50,20 +68,29 @@ def build_payload(args: argparse.Namespace) -> dict:
         "quality": args.quality,
         "background": args.background,
     }
-    if args.action:
-        tool["action"] = args.action
+    # action 미명시 시 input_image 유무로 자동 판정 (argparse default 와 explicit
+    # 값이 구분 가능하도록 default=None 으로 두고 여기서 결정).
+    effective_action = args.action
+    if effective_action is None:
+        effective_action = "edit" if args.input_image else "generate"
+    tool["action"] = effective_action
+
+    user_content: list[dict] = []
+    for img in (args.input_image or []):
+        user_content.append(_load_input_image(img))
+    user_content.append({"type": "input_text", "text": args.prompt})
+
+    instructions = (
+        "Use the image_generation tool to edit the provided image based on the prompt. "
+        "Return the image generation result."
+        if args.input_image else
+        "Use the image_generation tool to create the requested image. "
+        "Return the image generation result."
+    )
     return {
         "model": args.model,
-        "instructions": (
-            "Use the image_generation tool to create the requested image. "
-            "Return the image generation result."
-        ),
-        "input": [
-            {
-                "role": "user",
-                "content": [{"type": "input_text", "text": args.prompt}],
-            }
-        ],
+        "instructions": instructions,
+        "input": [{"role": "user", "content": user_content}],
         "tools": [tool],
         "tool_choice": {"type": "image_generation"},
         "store": False,
@@ -71,16 +98,22 @@ def build_payload(args: argparse.Namespace) -> dict:
     }
 
 
-def extract_image_b64(events, *, drain: bool) -> str:
-    """SSE 이벤트 stream 에서 image_generation_call result(base64) 를 추출한다.
+def extract_image_b64(events, *, drain: bool) -> tuple[str, dict | None]:
+    """SSE 이벤트 stream 에서 image_generation_call result(base64) 와 usage dict 추출.
 
     drain=True (events 파일 보존 모드) 이면 stream 을 끝까지 소비하고 마지막
-    result 를 반환한다(다중 결과는 경고). drain=False 이면 첫 결과 즉시 반환.
+    result 를 반환한다(다중 결과는 경고). drain=False 이면 첫 result 발견 즉시
+    break — 단 usage 는 그 시점까진 None 일 수 있다 (response.completed 가 더 뒤).
     """
     image_b64: str | None = None
+    usage: dict | None = None
     saw_multiple = False
     for event in events:
-        if event.get("type") != "response.output_item.done":
+        et = event.get("type")
+        if et == "response.completed":
+            usage = (event.get("response") or {}).get("usage") or usage
+            continue
+        if et != "response.output_item.done":
             continue
         item = event.get("item") or {}
         if item.get("type") != "image_generation_call":
@@ -99,7 +132,7 @@ def extract_image_b64(events, *, drain: bool) -> str:
         )
     if not image_b64:
         raise CodexToolError("No image_generation_call result found.")
-    return image_b64
+    return image_b64, usage
 
 
 def write_image(image_b64: str, output_path: pathlib.Path) -> None:
@@ -137,8 +170,16 @@ def main() -> int:
     parser.add_argument(
         "--action",
         choices=("auto", "generate", "edit"),
-        default="generate",
-        help="Image tool action",
+        default=None,
+        help="Image tool action. If omitted, picked automatically: `edit` when "
+             "--input-image is given, otherwise `generate`. Pass explicitly to override.",
+    )
+    parser.add_argument(
+        "--input-image",
+        action="append",
+        help="Input image to edit/reference. File path or http(s):// URL "
+             "(repeatable). Local files are auto-encoded as base64 data URLs. "
+             "Implies --action edit unless --action is set explicitly.",
     )
     parser.add_argument(
         "--events",
@@ -149,6 +190,13 @@ def main() -> int:
         type=float,
         default=240.0,
         help="HTTP timeout seconds (default: 240)",
+    )
+    parser.add_argument(
+        "--show-usage",
+        action="store_true",
+        help="Print response.completed usage to stderr "
+             "(input/cached/reasoning/output tokens). Requires --events to "
+             "drain the full stream so the completed event is observed.",
     )
     args = parser.parse_args()
 
@@ -163,10 +211,23 @@ def main() -> int:
             timeout=args.timeout,
             events_path=events_path,
         )
-        image_b64 = extract_image_b64(events, drain=events_path is not None)
+        # --show-usage 는 response.completed 가 stream 끝에 오므로 drain 필요.
+        # 둘 중 하나라도 켜져 있으면 drain.
+        drain = (events_path is not None) or args.show_usage
+        image_b64, usage = extract_image_b64(events, drain=drain)
         output_path = pathlib.Path(args.output)
         write_image(image_b64, output_path)
         print(f"Saved {output_path}")
+        if args.show_usage and usage:
+            cached = (usage.get("input_tokens_details") or {}).get("cached_tokens", 0)
+            reasoning = (usage.get("output_tokens_details") or {}).get("reasoning_tokens", 0)
+            sys.stderr.write(
+                f"usage: input={usage.get('input_tokens',0)} "
+                f"(cached={cached}) "
+                f"output={usage.get('output_tokens',0)} "
+                f"(reasoning={reasoning}) "
+                f"total={usage.get('total_tokens',0)}\n"
+            )
         return EXIT_OK
     except CodexError as e:
         sys.stderr.write(f"{e}\n")

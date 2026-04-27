@@ -20,6 +20,47 @@ import urllib.request
 from typing import Iterator, Optional
 
 
+# 잘못된 확장자 / 확장자 없는 파일에 대비해 매직 바이트로 image mimetype 을 판정한다.
+# extension 만 믿으면 HEIC 가 png 로 라벨링되어 backend 가 거절하는 식의 함정 발생.
+def detect_image_mime(data: bytes) -> Optional[str]:
+    """첫 16바이트로 image mimetype 을 판정. 모르면 None."""
+    if len(data) < 12:
+        return None
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if data[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    if data[:2] == b"BM":
+        return "image/bmp"
+    # HEIC/HEIF: ftyp box at offset 4
+    if data[4:8] == b"ftyp" and data[8:12] in (b"heic", b"heix", b"hevc", b"hevx", b"mif1", b"msf1"):
+        return "image/heic"
+    return None
+
+
+def guess_image_mime(path: pathlib.Path) -> str:
+    """파일 → image mimetype. 매직 바이트 only.
+
+    extension 기반 추측은 의도적으로 안 함 — `.png` 라고 적힌 텍스트 파일이 silently
+    image/png 로 라벨링되어 backend 에 보내지는 함정 차단. 매직 바이트가 없으면
+    ValueError 로 caller 가 명확히 거절하도록."""
+    try:
+        head = path.open("rb").read(16)
+    except OSError as e:
+        raise ValueError(f"cannot read image header: {path}: {e}")
+    mime = detect_image_mime(head)
+    if mime:
+        return mime
+    raise ValueError(
+        f"not a recognized image: {path} (first bytes={head[:8]!r}). "
+        f"Supported magic bytes: png/jpeg/gif/webp/bmp/heic."
+    )
+
+
 def _resolve_auth_path() -> pathlib.Path:
     """CODEX_AUTH_PATH 를 호출 시점에 resolve 한다 (import 시점이 아니라).
 

@@ -42,6 +42,16 @@ Do not attempt to send tools other than the three above. The endpoint returns
 | `model` | only `gpt-5.5` | every other variant tested returns 400 ("not supported when using Codex with a ChatGPT account") |
 | `reasoning.effort` | OK | values: `none`/`minimal`/`low`/`medium`/`high`/`xhigh` (model-dependent — gpt-5.5 rejects `minimal`) |
 | `reasoning_effort` (top-level alias) | 400 | `Unsupported parameter: reasoning_effort` |
+| `text.format = json_schema` (strict) | OK | requires `additionalProperties:false` on every object — `--json-schema` auto-injects it |
+| `text.format = json_object` | OK* | requires the literal word "json" somewhere in the input — `--json` adds it via instruction |
+| `web_search.search_context_size` | OK | `low`/`medium`/`high` — controls retrieval depth |
+| `web_search.filters.allowed_domains` | OK | array of bare domains (no scheme) |
+| `web_search.user_location` | OK | accepted by endpoint but model often skips actual searching for short prompts |
+| `input_image` (multimodal user content) | OK | `image_url` accepts `data:image/<mime>;base64,...` and `http(s)://` URLs |
+| `include = ["reasoning.encrypted_content"]` | OK | reasoning state can be replayed in next turn (verified end-to-end: turn1 reasoning → turn2 recall) |
+| `prompt_cache_key` | accepted, behavior unclear | endpoint already auto-caches matching prefixes. In one 3-call test (long shared prefix) `cached_tokens` was 0 with a key set on the first two calls, then 1280 on the third call without a key. Several explanations are possible (cache materialization timing, threshold, or key-induced namespacing) — we have **not** confirmed the cause. Not exposed via CLI; safest assumption is "don't set a key unless you have measured benefit." |
+| `parallel_tool_calls`, `store`, `stream` | OK | standard |
+| `max_tool_calls` | 400 | `Unsupported parameter` |
 
 ## How to invoke
 
@@ -93,13 +103,32 @@ this `SKILL.md`, and the plugin root is the directory that contains
   `minimal` ("not supported with the 'gpt-5.5' model"). Omit to use the
   model's default. Reasoning token cost shows up in `usage.output_tokens_details.reasoning_tokens`.
 - `--web` — enable server-side `web_search` tool (`tool_choice="auto"`)
-- `--json` — instruction-based JSON-only response (best-effort; endpoint
-  `response_format` support is not verified, so JSON is enforced via system
-  instruction)
+- `--search-context low|medium|high` — `--web` only. Controls
+  `web_search.search_context_size` (retrieval depth/cost trade-off).
+- `--allowed-domain DOMAIN` — `--web` only, repeatable. Restrict search results
+  to specific domains via `web_search.filters.allowed_domains`. Example:
+  `--allowed-domain python.org --allowed-domain docs.python.org`.
+- `--image PATH_OR_URL` — multimodal input image, repeatable. Local file
+  paths are auto-encoded as `data:image/<mime>;base64,...`; mimetype is detected
+  from magic bytes (PNG/JPEG/GIF/WebP/BMP/HEIC) — unknown formats fail loudly
+  rather than being silently labeled as PNG. `http(s)://` URLs pass through.
+  The image is sent in the same user-message content array as the prompt.
+- `--json` — instruction-based JSON-only response (best-effort)
+- `--json-schema PATH` — load a JSON schema from PATH and enforce it via
+  `text.format=json_schema` with `strict:true`. Backend rejects schemas where
+  any object is missing `additionalProperties:false`, so the script auto-injects
+  it into every nested object. Stronger than `--json`. Stdout will be valid
+  JSON parseable by `json.loads()` — pair with `--show-citations` (routed to
+  stderr in JSON mode) if you also need the search trail.
+- `--json-schema-name NAME` — schema name passed to backend (default `output`)
 - `--instructions` — override the default system instruction
 - `--show-citations` — print a citations footer (or `[no citations]` if empty);
   also prints the search queries the model issued. Routed to **stderr** when
-  `--json` is on, so stdout stays valid JSON for `json.loads()` callers.
+  `--json` or `--json-schema` is on, so stdout stays valid JSON for `json.loads()` callers.
+- `--show-usage` — print the `response.completed` usage breakdown to stderr:
+  `input` / `cached` / `output` / `reasoning` / `total` tokens. Useful for
+  monitoring cache hit rate and reasoning-token cost across runs without
+  parsing the SSE yourself.
 - `--events FILE` — save raw SSE for debugging
 - `--timeout` — HTTP timeout seconds (default 240 with `--web`, 120 otherwise)
 - `--max-retries` — retry count for network / 5xx errors only (default 1,
@@ -128,11 +157,37 @@ python3 ask.py --web --show-citations \
   "What changed in Python's asyncio between 3.12 and 3.13? Cite each claim."
 ```
 
-JSON output for downstream parsing:
+JSON output for downstream parsing (instruction-only, weaker):
 
 ```bash
 python3 ask.py --json \
   "Return a JSON array of the 5 most common SQL injection mitigations, each as {name, summary}."
+```
+
+JSON schema enforcement (backend-strict, stronger):
+
+```bash
+cat > /tmp/city.schema.json <<'JSON'
+{ "type":"object",
+  "properties": { "city":{"type":"string"}, "population_millions":{"type":"number"}, "country":{"type":"string"} },
+  "required": ["city","population_millions","country"] }
+JSON
+python3 ask.py --json-schema /tmp/city.schema.json "Give me one major city's data."
+# → {"city":"Tokyo","population_millions":14.0,"country":"Japan"}
+```
+
+Multimodal: ask about an image file:
+
+```bash
+python3 ask.py --image ./screenshot.png "What error is shown? Quote it verbatim."
+```
+
+Domain-scoped web research:
+
+```bash
+python3 ask.py --web --search-context low \
+  --allowed-domain python.org --allowed-domain docs.python.org \
+  "What's new in Python 3.14? One bullet."
 ```
 
 Save raw SSE for debugging an unexpected response:
