@@ -7,9 +7,39 @@ Use Codex AI features inside Claude Code by calling the ChatGPT subscription pat
 ## Skills
 
 - `imagegen` — image generation via the `image_generation` tool
+- `ask` — pure-text consultation / second-opinion / web research via GPT-5.
+  `--web` flips on the server-side `web_search` tool (verified working on this
+  endpoint), `--json` requests JSON-only output (instruction-based, best-effort
+  — `response_format` support on this endpoint is unverified),
+  `--show-citations` prints a citations footer (routed to stderr when `--json`
+  is on so stdout stays parseable).
 
-More skills will be added (chat, research, code, vision …) using the shared
-`scripts/codex_client.py` helper.
+More skills may follow as thin wrappers over `ask` (e.g. `review` for diff
+review) using the shared `scripts/codex_client.py` helper.
+
+## Verified server-side tool whitelist
+
+The `chatgpt.com/backend-api/codex/responses` endpoint with ChatGPT OAuth
+accepts a **narrow** tool surface — not Platform Responses parity. Verified
+by `scripts/probe_capabilities.py`:
+
+| Tool                | Status | Used by |
+|---------------------|--------|---------|
+| (no tools, text)    | OK     | `ask` (default) |
+| `image_generation`  | OK     | `imagegen` |
+| `web_search`        | OK     | `ask --web` |
+| `web_search_preview`| 400    | (Platform alias, rejected) |
+| `code_interpreter`  | 400    | (rejected — `Unsupported tool type`) |
+| `file_search`       | 400    | (rejected — `Unsupported tool type`) |
+
+Re-run the probe at any time:
+
+```bash
+python3 scripts/probe_capabilities.py --out /tmp/codex-probe
+```
+
+Treat this as a regression check: if ChatGPT silently changes the schema,
+existing skills will break, and this script is the fastest way to find out.
 
 ## Prerequisites
 
