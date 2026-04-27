@@ -99,6 +99,9 @@ def build_payload(args: argparse.Namespace, instructions: str) -> dict:
         # tool_choice="auto" 만 probe 로 검증됐다. 강제 호출 모양은 미검증.
         payload["tools"] = [{"type": "web_search"}]
         payload["tool_choice"] = "auto"
+    if args.effort:
+        # 표준 Responses API 형식. top-level reasoning_effort 별칭은 endpoint 가 거절.
+        payload["reasoning"] = {"effort": args.effort}
     return payload
 
 
@@ -196,9 +199,19 @@ def main() -> int:
         description="Ask GPT-5 directly via the codex responses endpoint "
                     "(no Node CLI, ChatGPT subscription path).",
     )
-    ap.add_argument("prompt", help="질문/프롬프트")
+    ap.add_argument("prompt", nargs="?",
+                    help="질문/프롬프트 (생략 시 --stdin 필수). --stdin 과 같이 "
+                         "주면 헤더로 쓰이고 stdin 본문이 그 뒤에 붙는다.")
+    ap.add_argument("--stdin", action="store_true", dest="read_stdin",
+                    help="stdin 에서 프롬프트 본문을 읽는다. diff/파일을 그대로 "
+                         "파이프할 때 shell escaping 을 피하려면 이걸 써라.")
     ap.add_argument("--model", default="gpt-5.5",
-                    help="모델 id (default gpt-5.5)")
+                    help="모델 id (default gpt-5.5). ChatGPT 구독 endpoint 는 "
+                         "현재 gpt-5.5 외 variant 를 거절한다 (probe 검증).")
+    ap.add_argument("--effort",
+                    choices=("none", "minimal", "low", "medium", "high", "xhigh"),
+                    help="reasoning.effort. 모델마다 허용값 다름 "
+                         "(gpt-5.5 는 minimal 미지원). 미지정 시 모델 default.")
     ap.add_argument("--web", action="store_true",
                     help="server-side web_search 도구 활성화 (tool_choice=auto)")
     ap.add_argument("--json", action="store_true",
@@ -219,6 +232,16 @@ def main() -> int:
     # 명시적으로 0..5 로 제한한다.
     if not (0 <= args.max_retries <= 5):
         ap.error(f"--max-retries must be in 0..5, got {args.max_retries}")
+
+    # stdin 본문은 prompt 인자 뒤에 붙는다. 둘 다 주면 prompt 가 헤더 (예: "Review
+    # this diff:") + stdin 이 본문 (raw diff). 둘 다 없으면 호출 잘못.
+    if args.read_stdin:
+        body = sys.stdin.read()
+        if not body.strip():
+            ap.error("--stdin given but stdin was empty")
+        args.prompt = f"{args.prompt}\n\n{body}" if args.prompt else body
+    elif not args.prompt:
+        ap.error("prompt 인자 또는 --stdin 중 하나는 필수")
 
     if args.timeout is None:
         # web_search 가 켜지면 검색 + 합성으로 평균 latency 가 길어진다.
