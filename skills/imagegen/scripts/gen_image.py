@@ -99,15 +99,13 @@ def build_payload(args: argparse.Namespace) -> dict:
     }
 
 
-def extract_image_b64(events, *, drain: bool) -> tuple[str, dict | None]:
-    """SSE 이벤트 stream 에서 image_generation_call result(base64) 와 usage dict 추출.
+def extract_image_b64(events, *, drain: bool) -> str:
+    """SSE 이벤트 stream 에서 image_generation_call result(base64) 를 추출한다.
 
     drain=True (events 파일 보존 모드) 이면 stream 을 끝까지 소비하고 마지막
-    result 를 반환한다(다중 결과는 경고). drain=False 이면 첫 result 발견 즉시
-    break — 단 usage 는 그 시점까진 None 일 수 있다 (response.completed 가 더 뒤).
+    result 를 반환한다(다중 결과는 경고). drain=False 이면 첫 결과 즉시 반환.
     """
     image_b64: str | None = None
-    usage: dict | None = None
     saw_multiple = False
     for event in events:
         et = event.get("type") or ""
@@ -117,9 +115,6 @@ def extract_image_b64(events, *, drain: bool) -> tuple[str, dict | None]:
         if "error" in et or et == "response.failed":
             err = event.get("error") or event.get("response", {}).get("error") or event
             raise CodexToolError(f"stream error event: {json.dumps(err)[:300]}")
-        if et == "response.completed":
-            usage = (event.get("response") or {}).get("usage") or usage
-            continue
         if et != "response.output_item.done":
             continue
         item = event.get("item") or {}
@@ -139,7 +134,7 @@ def extract_image_b64(events, *, drain: bool) -> tuple[str, dict | None]:
         )
     if not image_b64:
         raise CodexToolError("No image_generation_call result found.")
-    return image_b64, usage
+    return image_b64
 
 
 def write_image(image_b64: str, output_path: pathlib.Path) -> None:
@@ -198,13 +193,6 @@ def main() -> int:
         default=240.0,
         help="HTTP timeout seconds (default: 240)",
     )
-    parser.add_argument(
-        "--show-usage",
-        action="store_true",
-        help="Print response.completed usage to stderr "
-             "(input/cached/reasoning/output tokens). Implies a full SSE drain "
-             "since response.completed arrives at the very end of the stream.",
-    )
     args = parser.parse_args()
 
     try:
@@ -218,23 +206,10 @@ def main() -> int:
             timeout=args.timeout,
             events_path=events_path,
         )
-        # --show-usage 는 response.completed 가 stream 끝에 오므로 drain 필요.
-        # 둘 중 하나라도 켜져 있으면 drain.
-        drain = (events_path is not None) or args.show_usage
-        image_b64, usage = extract_image_b64(events, drain=drain)
+        image_b64 = extract_image_b64(events, drain=events_path is not None)
         output_path = pathlib.Path(args.output)
         write_image(image_b64, output_path)
         print(f"Saved {output_path}")
-        if args.show_usage and usage:
-            cached = (usage.get("input_tokens_details") or {}).get("cached_tokens", 0)
-            reasoning = (usage.get("output_tokens_details") or {}).get("reasoning_tokens", 0)
-            sys.stderr.write(
-                f"usage: input={usage.get('input_tokens',0)} "
-                f"(cached={cached}) "
-                f"output={usage.get('output_tokens',0)} "
-                f"(reasoning={reasoning}) "
-                f"total={usage.get('total_tokens',0)}\n"
-            )
         return EXIT_OK
     except CodexError as e:
         sys.stderr.write(f"{e}\n")

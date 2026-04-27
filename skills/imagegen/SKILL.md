@@ -63,7 +63,6 @@ root once invoked, so any absolute path to it works.
 - `--output` — output path (parent directory is auto-created)
 - `--events` — save raw SSE event text for debugging
 - `--timeout` — HTTP timeout seconds (default `240`). Square 1024x1024 usually finishes well under 60 s; non-square or larger sizes can need the full window because reasoning + generation both grow.
-- `--show-usage` — print `response.completed` usage to stderr (`input` / `cached` / `output` / `reasoning` / `total` tokens). Implies a full SSE drain (the completed event arrives at the very end of the stream).
 
 ## Environment overrides
 
