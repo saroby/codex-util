@@ -55,13 +55,13 @@ root once invoked, so any absolute path to it works.
 
 - `prompt` — required text prompt
 - `--model` — mainline model used to invoke the tool (default `gpt-5.5`)
-- `--size` — for example `1024x1024` (default `1024x1024`)
+- `--size` — `WxH` (default `1024x1024`). Both width and height must be multiples of 16, and the longer edge must be ≤ 3840. Non-square or large sizes (e.g. `1024x1536`, `2048x2048`) take noticeably longer to generate — see `--timeout` below.
 - `--quality` — `auto|low|medium|high` (default `high`)
 - `--background` — `auto|opaque|transparent` (default `auto`)
 - `--action` — `auto|generate|edit` (default `generate`)
 - `--output` — output path (parent directory is auto-created)
 - `--events` — save raw SSE event text for debugging
-- `--timeout` — HTTP timeout seconds (default `120`)
+- `--timeout` — HTTP timeout seconds (default `240`). Square 1024x1024 usually finishes well under 60 s; non-square or larger sizes can need the full window because reasoning + generation both grow.
 
 ## Environment overrides
 
@@ -107,8 +107,8 @@ codex login          # full re-login
 
 ### Exit 1 — no image result
 
-Re-run with `--events sse.log` and inspect the raw SSE stream. If the response schema changed, `extract_image_b64` (or `_parse_sse_line` in `codex_client.py`) needs an update.
+Re-run with `--events sse.log` and inspect the raw SSE stream. The most common cause is a moderation block: the stream ends with a `type:"error"` event (e.g. `code:"moderation_blocked"`, `type:"image_generation_user_error"`) followed by `response.failed`, and only the `reasoning` item ever gets an `output_item.done`. In that case rephrase the prompt — it is not a bug. If no error event is present and the schema appears different, `extract_image_b64` (or `_parse_sse_line` in `codex_client.py`) needs an update.
 
 ### Transparent background fails
 
-Some model/tool combinations do not support transparent backgrounds. Retry with `--background opaque`.
+The backend image model (`gpt-image-2`) does not support transparent backgrounds at all — only `auto` and `opaque`. Retry with `--background opaque`.
