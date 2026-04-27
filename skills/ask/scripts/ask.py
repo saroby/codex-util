@@ -85,13 +85,26 @@ JSON_GUARD = (
 )
 
 
+def _is_object_type(t) -> bool:
+    """type 이 'object' (string) 또는 ['object', 'null'] 같은 array 형식 둘 다 인식."""
+    if t == "object":
+        return True
+    if isinstance(t, list) and "object" in t:
+        return True
+    return False
+
+
 def _force_additional_properties_false(schema: dict) -> None:
     """endpoint 의 strict json_schema 는 모든 object 에 additionalProperties:false 를
     요구한다 (`Invalid schema for response_format: 'additionalProperties' is required
-    to be supplied and to be false`). 사용자가 빼먹어도 안전하게 동작하도록 자동 보강."""
+    to be supplied and to be false`). 사용자가 빼먹어도 안전하게 동작하도록 자동 보강.
+
+    nullable object (`type: ["object","null"]`) 같은 array form 도 처리한다.
+    이미 명시된 additionalProperties (true/false) 는 건드리지 않는다 — 사용자 의도
+    존중이지만 true 로 둔 채 strict 호출하면 backend 가 거절할 것이다."""
     if not isinstance(schema, dict):
         return
-    if schema.get("type") == "object" and "additionalProperties" not in schema:
+    if _is_object_type(schema.get("type")) and "additionalProperties" not in schema:
         schema["additionalProperties"] = False
     for v in schema.values():
         if isinstance(v, dict):

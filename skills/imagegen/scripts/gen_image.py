@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import base64
 import binascii
+import json
 import pathlib
 import sys
 
@@ -109,7 +110,13 @@ def extract_image_b64(events, *, drain: bool) -> tuple[str, dict | None]:
     usage: dict | None = None
     saw_multiple = False
     for event in events:
-        et = event.get("type")
+        et = event.get("type") or ""
+        # ask.py 와 동일한 휴리스틱: stream-level error / response.failed 는 즉시
+        # fatal 로 surface (moderation_blocked 같은 backend 에러가 silent 로
+        # "no image result" 로 묻히는 걸 막는다).
+        if "error" in et or et == "response.failed":
+            err = event.get("error") or event.get("response", {}).get("error") or event
+            raise CodexToolError(f"stream error event: {json.dumps(err)[:300]}")
         if et == "response.completed":
             usage = (event.get("response") or {}).get("usage") or usage
             continue
@@ -195,8 +202,8 @@ def main() -> int:
         "--show-usage",
         action="store_true",
         help="Print response.completed usage to stderr "
-             "(input/cached/reasoning/output tokens). Requires --events to "
-             "drain the full stream so the completed event is observed.",
+             "(input/cached/reasoning/output tokens). Implies a full SSE drain "
+             "since response.completed arrives at the very end of the stream.",
     )
     args = parser.parse_args()
 
