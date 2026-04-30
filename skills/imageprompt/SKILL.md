@@ -20,6 +20,41 @@ because the model is powerful or because the skill was loaded.
 No second LLM rewrite layer — would risk corrupting precise
 directives and routinely auto-apply composition invention.
 
+## Principles (from OpenAI prompt guidance)
+
+This skill applies general prompt-engineering principles from
+[OpenAI's GPT-5.5 prompt guidance][src] to image prompts. The
+mapping is intentional — when something here feels arbitrary,
+trace it back to the guidance:
+
+- **Minimum sufficient.** `PASS_0` is the default; escalate only
+  on documented control risk. Empty slots stay empty (analog to
+  the guidance's "use the minimum evidence sufficient to answer
+  correctly, then stop").
+- **Don't fabricate.** No inferred demographics, lens, mood, time
+  of day, or composition the user did not name (analog to "never
+  invent specific names, metrics, or claims without source").
+- **Stop rules are binding.** `EXACT TEXT: "..."`, `only text in
+  the image`, `do not alter`, `keep unchanged`, `replace only` are
+  terminal constraints — phrase them so the model treats them as
+  such. Stop rules belong inline, not as meta-commentary.
+- **Output contract per mode.** Mode label → prompt body in fixed
+  order: single medium → locks → inline constraints (`PASS_1`),
+  optionally + `scene → subject → details → composition →
+  lighting → style → text → constraints` (`PASS_2`). No
+  meta-instructions ("be detailed", "think step by step") leak
+  into the body — they corrupt `revised_prompt`.
+- **Instruction hierarchy.** User words anchor; skill defaults
+  yield. If the user named one axis, do not invent others to
+  "match." User-supplied coherent NL with no failure mode → trust
+  the prior, emit `PASS_0`.
+- **Verification loop.** After hand-off, inspect the image and
+  `grep revised_prompt sse.log`. On drift, tighten the relevant
+  lock (medium, `EXACT TEXT`, preserve list, image indexing) and
+  rerun — do not escalate to `PASS_2` invention.
+
+[src]: https://developers.openai.com/api/docs/guides/prompt-guidance?model=gpt-5.5
+
 ## Output format
 
 Every output begins with a literal mode label:
