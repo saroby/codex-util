@@ -1,6 +1,10 @@
 ---
 name: imageprompt
-description: Run before `imagegen` when an image request has control risk — visible text, edits, multi-image inputs, IP/brand cleanup, ambiguous ontology ("fox mage", "knight in armor"), exact counts, or tag-soup / fragmented aesthetic input that needs normalization. Triggers on "이미지 편집해줘", "글자가 들어간", "사인", "로고", "캐릭터 일관성", "여러 이미지로", "edit this image", "image with text", "character consistency", "이미지 프롬프트 다듬어줘", "improve the image prompt". For coherent NL requests with no control risk (e.g., "에스프레소 내리는 바리스타 사진", "노인 인물 사진. 따뜻한 골든아워 분위기"), call `imagegen` directly. Three named output modes — every output starts with the literal mode label: `PASS_0_MINIMAL:` (passthrough + ≤ 1 scene-conditional exclusion), `PASS_1_LOCK:` (medium / EXACT TEXT / inline constraints / edit verbs / multi-image indexing / IP cleanup), `PASS_1_LOCK + PASS_2_COMPOSE:` (lock + slot-granular composition; only for ambiguous-ontology lock-insufficient cases or tag-soup normalization). No second LLM rewrite call.
+description: >-
+  Normalize risky image requests before `imagegen`: visible text, edits,
+  multi-image inputs, brand/IP cleanup, exact counts, ambiguous subjects, or
+  fragmented prompts. Simple natural-language image requests should use
+  `imagegen` directly.
 ---
 
 # Image Prompt Crafting (for `gpt-image-2`)
